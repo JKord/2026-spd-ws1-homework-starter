@@ -59,9 +59,14 @@ Blocked: "app/.env.production" is an env file and may contain secrets. Agents ne
 ```
 
 Bugs found and fixed during this validation (all re-tested above):
-- PowerShell pipe adds a BOM → `JSON.parse` failed → hook failed open. Fixed by stripping the BOM (case 21).
-- Case variants (`DB/Migrations/…`, `.ENV`) bypassed the check on Windows. Fixed with case-insensitive matching on `win32` (cases 7, 16).
+- PowerShell pipe adds a BOM → `JSON.parse` failed → hook failed open. Fixed by stripping the BOM before parsing (case 21).
+- Case variants (`DB/Migrations/…`, `.ENV`) bypassed the check on Windows. Initially fixed with case-insensitive matching on `win32` only; that still failed open on macOS (APFS is case-insensitive by default too). Fixed by lowercasing the match keys unconditionally — safe on case-sensitive FS as well, since blocking still requires `existsSync()` with the original casing (cases 7, 16).
 - Relative hook command and cwd-relative paths could break after the agent `cd`s. Fixed with `$CLAUDE_PROJECT_DIR` (case 20).
+
+The four regressions above are also covered by automated tests: `.claude/hooks/protect-migrations.test.ts`
+(`npx vitest run`, included in `npm test`) pipes payloads into the hook and asserts exit codes: wrong-case
+migration path → 2 (skipped on case-sensitive FS, where that path genuinely does not exist), BOM-prefixed
+payload → 2, `.ENV` → 2, new migration → 0.
 
 The temp probe was deleted after the test; `db/migrations/` still contains only `001_` and `002_`, and
 `git status db/` is clean. No `.env` file exists in the repo, so no secret was ever read.

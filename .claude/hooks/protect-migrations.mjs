@@ -11,9 +11,10 @@ let raw = "";
 process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) raw += chunk;
 
+if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // Windows PowerShell pipes may prepend a BOM
 let payload;
 try {
-  payload = JSON.parse(raw.replace(/^﻿/, "")); // Windows PowerShell pipes may prepend a BOM
+  payload = JSON.parse(raw);
 } catch {
   process.exit(0); // not our payload — fail open
 }
@@ -25,11 +26,13 @@ const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const abs = resolve(root, filePath);
 const rel = relative(root, abs).replaceAll("\\", "/");
 const name = basename(abs);
-// Windows file systems are case-insensitive: "DB/Migrations/001.sql" is the same file.
-const relKey = process.platform === "win32" ? rel.toLowerCase() : rel;
+// Windows and macOS (APFS by default) are case-insensitive: "DB/Migrations/001.sql" is the
+// same file. Lowercase the keys unconditionally — this cannot over-block migrations, since
+// blocking still requires existsSync(abs) with the original casing.
+const relKey = rel.toLowerCase();
 
 // .env / .env.* anywhere in the repo — block creation and edits alike.
-const nameKey = process.platform === "win32" ? name.toLowerCase() : name;
+const nameKey = name.toLowerCase();
 if (nameKey === ".env" || nameKey.startsWith(".env.")) {
   console.error(
     `Blocked: "${rel}" is an env file and may contain secrets. Agents never create or edit .env files — ask the repo owner (@JKord).`,
