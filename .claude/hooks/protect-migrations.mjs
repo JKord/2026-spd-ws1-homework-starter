@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // owner: @JKord · why: an applied migration was edited once, silently changing schema history for everyone who had already run it; .env files must never be created or edited by agents · review-by: 2027-02-28
 // PreToolUse hook for Edit|MultiEdit|Write: reads the JSON payload from stdin, exits 2 (blocking) when
-// tool_input.file_path is an existing file in db/migrations/ or any .env / .env.* file (at any depth).
+// tool_input.file_path is a git-tracked file in db/migrations/ or any .env / .env.* file (at any depth).
 // Paths resolve against $CLAUDE_PROJECT_DIR (falls back to cwd), so the hook works after the agent `cd`s.
 // Works on Windows and POSIX: path handling via node:path, no shell builtins.
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 
@@ -31,6 +32,25 @@ const name = basename(abs);
 // blocking still requires existsSync(abs) with the original casing.
 const relKey = rel.toLowerCase();
 
+// True if git tracks the file, false if not, null if git failed (binary missing, not a repo, …).
+// The pathspec uses icase magic: on case-insensitive filesystems (Windows, macOS) a wrong-case
+// path like "DB/Migrations/…" resolves to the real tracked file, but fs.realpathSync does not
+// normalise the casing, so the lookup must ignore case. Blocking still requires existsSync(abs)
+// with the given casing, so on a case-sensitive FS this can never match a different file.
+function isGitTracked(absPath) {
+  const relReal = relative(root, absPath).replaceAll("\\", "/");
+  try {
+    const out = execFileSync("git", ["ls-files", "--", `:(icase)${relReal}`], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.trim().length > 0;
+  } catch {
+    return null;
+  }
+}
+
 // .env / .env.* anywhere in the repo — block creation and edits alike.
 const nameKey = name.toLowerCase();
 if (nameKey === ".env" || nameKey.startsWith(".env.")) {
@@ -40,8 +60,18 @@ if (nameKey === ".env" || nameKey.startsWith(".env.")) {
   process.exit(2);
 }
 
-// Existing migrations are immutable; new ones (Write of a not-yet-existing file) are allowed.
-if (relKey.startsWith("db/migrations/") && existsSync(abs)) {
+// Applied migrations are immutable; brand-new ones are not: a migration the agent created a
+// minute ago is still untracked, so it stays editable until it is committed. Block only files
+// git already tracks (existsSync on the original casing still guards against case games).
+// If git itself fails (not a repo, no git binary), fall back to the previous behaviour: block
+// any existing file under db/migrations/.
+function isAppliedMigration() {
+  if (!relKey.startsWith("db/migrations/") || !existsSync(abs)) return false;
+  const tracked = isGitTracked(abs);
+  return tracked === null ? true : tracked;
+}
+
+if (isAppliedMigration()) {
   console.error(
     `Blocked: "${rel}" is an applied DB migration and must not be edited. ` +
       `Create a new file db/migrations/00N_name.sql with the next free number instead — see .claude/rules/migrations.md.`,

@@ -1,7 +1,7 @@
 // Tests for the PreToolUse hook: each case pipes a JSON payload into the script
 // (as Claude Code does) and asserts the exit code. See docs/ai/hook-evidence.md.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -49,4 +49,16 @@ it("blocks .env files regardless of name case", () => {
 it("allows writing a new migration", () => {
   const r = runHook(payload("db/migrations/003_add_task_priority.sql"));
   expect(r.status).toBe(0);
+});
+
+it("allows editing a migration that exists but is not tracked by git yet", () => {
+  // A migration the agent just created is untracked, so it stays editable until committed.
+  const probe = join(root, "db", "migrations", "999_untracked_probe.sql");
+  writeFileSync(probe, "-- probe: deleted by the test\n");
+  try {
+    const r = runHook(payload("db/migrations/999_untracked_probe.sql"));
+    expect(r.status).toBe(0);
+  } finally {
+    rmSync(probe, { force: true });
+  }
 });

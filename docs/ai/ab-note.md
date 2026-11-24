@@ -10,9 +10,18 @@
 `AGENTS.md`, `.claude/rules/migrations.md`, `.claude/skills/add-task-field/SKILL.md`,
 `.claude/hooks/protect-migrations.mjs`, `.claude/settings.json`)
 
-**Method.** Each run was a fresh agent session with no extra explanation beyond the prompt, started from the same
-clean working tree. The tree was restored between runs. Tool-use counts and durations come from the session
-summaries; durations are approximate wall-clock times.
+**Method.** Each run was a fresh headless agent session launched as `claude -p "<task>" --output-format json`
+(the launch mode from `docs/ai/templates/ab-note.md`), with no extra explanation beyond the prompt, started from
+the same clean working tree. The tree was restored between runs. Tool-use counts and durations come from the
+session summaries; durations are approximate wall-clock times. Note on prompts: in `-p` (print) mode permission
+prompts cannot be shown or answered — B ran `db:reset` without an `ask` prompt, which is consistent with the
+`settings.json` ask rules not being enforced during these runs (see section 3 of
+[`hook-evidence.md`](hook-evidence.md)); it is not evidence that prompting works.
+
+**Caveat on `db:reset` as verification.** The tests do not touch the on-disk database: `lib/tasks.test.ts` opens
+an in-memory SQLite DB (`openDb(":memory:")`), which replays all migrations itself. So `db:reset` (which wipes and
+replays `data/tasks.db` on disk) verifies nothing that `npm test` does not already cover — in the table above,
+green tests come from the in-memory run, and `db:reset` only refreshes the local dev database.
 
 ## Results (observed)
 

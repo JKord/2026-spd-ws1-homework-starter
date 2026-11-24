@@ -4,9 +4,13 @@
 
 Hook: `PreToolUse`, matcher `Edit|MultiEdit|Write`, registered in `.claude/settings.json` as
 `node "$CLAUDE_PROJECT_DIR/.claude/hooks/protect-migrations.mjs"`. It blocks (exit 2, reason on stderr) an
-Edit/Write of an **existing** file under `db/migrations/` or of any `.env` / `.env.*` file at any depth.
+Edit/Write of a **git-tracked** file under `db/migrations/` or of any `.env` / `.env.*` file at any depth.
+"Git-tracked" (not merely existing): a migration the agent created a minute ago is still untracked, so it stays
+editable until committed — blocking it made the hook unusable for legitimate new-migration work. If git itself
+fails (no binary, not a repo), the hook falls back to blocking any existing file under `db/migrations/`.
 
-Environment: Windows 11, Node v25.2.1, Claude Code 2.1.227, 2026-11-19.
+Environment: Windows 11, Node v25.2.1, Claude Code 2.1.227 → 2.1.331 (`claude update` run 2026-11-24), hook
+evidence dated 2026-11-19 (direct tests) and 2026-11-24 (live session block, section 3).
 
 ## 1. Direct hook tests (script run with sample payloads, per `docs/ai/hook-test.md`)
 
@@ -22,7 +26,10 @@ $ echo $?
 ```
 
 Full matrix: a throwaway Node runner (kept outside the repo, deleted afterwards) piped JSON payloads into the hook
-with `CLAUDE_PROJECT_DIR` set to the repo root. Result: **24/24 PASS**. `<repo>` = the absolute repo path.
+with `CLAUDE_PROJECT_DIR` set to the repo root. Result: **24/24 PASS** on 2026-11-19 against the "existing file"
+semantics. Cases 10, 11 and 24 involve *new* migrations; under the git-tracked semantics (2026-11-24) their
+expected results change as marked in the table, and they were re-verified with the updated runner. `<repo>` =
+the absolute repo path.
 
 | # | Tool | `file_path` | Expected | Exit |
 |---|---|---|---|---|
@@ -49,7 +56,7 @@ with `CLAUDE_PROJECT_DIR` set to the repo root. Result: **24/24 PASS**. `<repo>`
 | 21 | Edit | BOM-prefixed payload (as Windows PowerShell pipes produce) | block | 2 |
 | 22 | — | malformed payload `not json` | fail open | 0 |
 | 23 | Bash | payload without `file_path` | allow | 0 |
-| 24 | Edit → Write | temp file `db/migrations/999_tmp_probe.sql`: exists → after deletion | block → allow | 2 → 0 |
+| 24 | Edit → Write | temp file `db/migrations/999_tmp_probe.sql`: exists (untracked) → after deletion | ~~block~~ → allow (git-tracked semantics) | ~~2~~ → 0 → 0 |
 
 Representative stderr (identical wording for every migration block, path normalised to forward slashes):
 
@@ -62,11 +69,16 @@ Bugs found and fixed during this validation (all re-tested above):
 - PowerShell pipe adds a BOM → `JSON.parse` failed → hook failed open. Fixed by stripping the BOM before parsing (case 21).
 - Case variants (`DB/Migrations/…`, `.ENV`) bypassed the check on Windows. Initially fixed with case-insensitive matching on `win32` only; that still failed open on macOS (APFS is case-insensitive by default too). Fixed by lowercasing the match keys unconditionally — safe on case-sensitive FS as well, since blocking still requires `existsSync()` with the original casing (cases 7, 16).
 - Relative hook command and cwd-relative paths could break after the agent `cd`s. Fixed with `$CLAUDE_PROJECT_DIR` (case 20).
+- Blocking "existing" files also blocked a migration the agent had created a minute earlier (it exists as soon as
+  it is written, but is not committed yet). Fixed by blocking only git-tracked files: the lookup asks
+  `git ls-files -- ":(icase)<path>"` — icase because `fs.realpathSync` does not normalise casing on Windows/macOS,
+  so a wrong-case path must still match the tracked file (case 7 re-verified).
 
-The four regressions above are also covered by automated tests: `.claude/hooks/protect-migrations.test.ts`
+The regressions above are also covered by automated tests: `.claude/hooks/protect-migrations.test.ts`
 (`npx vitest run`, included in `npm test`) pipes payloads into the hook and asserts exit codes: wrong-case
 migration path → 2 (skipped on case-sensitive FS, where that path genuinely does not exist), BOM-prefixed
-payload → 2, `.ENV` → 2, new migration → 0.
+payload → 2, `.ENV` → 2, new migration → 0, existing-but-untracked migration → 0 (a temp file created and
+deleted by the test). 9/9 pass as of 2026-11-24.
 
 The temp probe was deleted after the test; `db/migrations/` still contains only `001_` and `002_`, and
 `git status db/` is clean. No `.env` file exists in the repo, so no secret was ever read.
@@ -76,36 +88,39 @@ The temp probe was deleted after the test; `db/migrations/` still contains only 
 | Rule in `.claude/settings.json` | Intended risk | Verified enforcement? |
 |---|---|---|
 | `deny` `Read(./.env)`, `Read(./.env.*)`, `Read(./**/.env)`, `Read(./**/.env.*)` | secrets leaking into context | **No** — see section 3 |
-| `deny` `Bash(git push --force:*)`, `Bash(git push -f:*)` | rewriting shared history | not tested (destructive) |
-| `deny` `Bash(rm -rf:*)` | mass deletion | not tested (destructive) |
-| `ask` `Bash(npm run db:reset)` | wipes local DB | not tested |
+| `deny` `Bash(git push *--force*)`, `Bash(git push -f:*)`, `Bash(git push * -f)`, `Bash(git push * -f *)` | rewriting shared history | not tested (destructive) |
+| `deny` `Bash(rm *-rf*)`, `Bash(rm *-fr*)` | mass deletion | not tested (destructive) |
+| `ask` `Bash(npm run db:reset)` | wipes local DB | not tested (A/B runs were headless — see the A/B note) |
 | `ask` `Bash(git push:*)`, `Bash(npm install:*)` | outward-facing / supply chain | not tested |
-| `ask` Edit/Write of `.claude/**`, `AGENTS.md`, `.github/CODEOWNERS` | agent changing its own guardrails | **No** — see section 3 |
+| `ask` `Edit(./.claude/**)`, `Edit(./AGENTS.md)`, `Edit(./.github/CODEOWNERS)` (Edit rules cover Write/MultiEdit, so no separate `Write` rules) | agent changing its own guardrails | **No** — see section 3 |
+| `ask` `Edit(./db/migrations/**)` | permission-layer backstop to the hook, matches the matrix's L2 "ask before acting" for migrations | **No** — see section 3 |
 | `allow` `Bash(npm test)`, `Bash(npm run typecheck)` | none — safe, read-only checks | not tested |
 
 The file parses as valid JSON. Rule syntax follows the Claude Code permission format, but syntax alone is not
 evidence of enforcement.
 
-## 3. End-to-end Claude Code behaviour — NOT yet demonstrated
+## 3. End-to-end Claude Code behaviour
 
-In the session used for this validation, `.claude/settings.json` was created **after** the session started.
+**Hook — demonstrated live (2026-11-24).** In a session started *after* `.claude/settings.json` existed, the
+agent was asked to edit an applied migration. The edit was blocked by the hook before the tool ran, with the
+message pasted verbatim from the session:
 
-- **Hook:** the agent wrote a new throwaway file `db/migrations/999_e2e_probe.sql` (allowed, correct), then
-  edited it. The edit was **not blocked** — the hook did not run in this session. The file was deleted right away.
-- **Deny:** `Read(.env)` returned "File does not exist" instead of a permission denial, so the deny rule was not
-  applied in this session (no secret involved — the file doesn't exist).
-- **Ask:** edits to `.claude/**` and `AGENTS.md` earlier in the same session did not prompt.
+```text
+PreToolUse:Edit hook error: [node "$CLAUDE_PROJECT_DIR/.claude/hooks/protect-migrations.mjs"]: Blocked: "db/migrations/001_create_tasks.sql" is an applied DB migration and must not be edited. Create a new file db/migrations/00N_name.sql with the next free number instead — see .claude/rules/migrations.md.
+```
 
-Most likely cause: project settings were not loaded by this already-running session. Not confirmed. Other
-possibilities: Claude Code 2.1.227 is older than the required 2.1.281, or the project settings are not trusted
-yet. HOMEWORK.md accepts the direct test in section 1 as evidence when project hooks don't fire.
+The file was not modified (`git status db/` stayed clean). Caveat: that session's binary was 2.1.227 at start;
+`claude update` to 2.1.331 was run the same day. The earlier session (2026-11-19), in which settings were created
+mid-session, showed none of the below — the hook did not run, `Read(.env)` returned "File does not exist" instead
+of a permission denial, and edits to `.claude/**`/`AGENTS.md` did not prompt. Most likely cause: project settings
+are only loaded at session start.
 
-The A/B note (`docs/ai/ab-note.md`) records that the hook never fired in the B runs. For the same reason, it is
-not established that the hook and permissions were active during those runs; the skill, rule and `AGENTS.md`
-influence is unaffected (the B agents read those files).
+**Deny / ask — still not demonstrated.** `Read(.env)` cannot be tested without a real `.env` (intentionally
+absent), and `ask` prompts are not observable from headless runs (the A/B runs were launched with `claude -p`,
+see the A/B note).
 
-**To complete e2e evidence:** start a **new** session in the repo (after `claude update`), run `/hooks` to confirm
-the hook is listed, ask the agent to edit `db/migrations/001_create_tasks.sql`, and paste the block message here.
+**To complete e2e evidence:** in a fresh interactive session on 2.1.331+, run `/hooks` (hook listed) and `/memory`
+(`AGENTS.md` listed), and trigger an `ask` rule (e.g. ask the agent to edit `AGENTS.md`).
 
 ## Known limits
 

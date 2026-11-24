@@ -18,20 +18,21 @@
       "Read(./.env.*)",
       "Read(./**/.env)",
       "Read(./**/.env.*)",
-      "Bash(git push --force:*)",
+      "Bash(git push *--force*)",
       "Bash(git push -f:*)",
-      "Bash(rm -rf:*)"
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(rm *-rf*)",
+      "Bash(rm *-fr*)"
     ],
     "ask": [
       "Bash(npm run db:reset)",
       "Bash(git push:*)",
       "Bash(npm install:*)",
       "Edit(./.claude/**)",
-      "Write(./.claude/**)",
       "Edit(./AGENTS.md)",
-      "Write(./AGENTS.md)",
       "Edit(./.github/CODEOWNERS)",
-      "Write(./.github/CODEOWNERS)"
+      "Edit(./db/migrations/**)"
     ],
     "allow": [
       "Bash(npm test)",
