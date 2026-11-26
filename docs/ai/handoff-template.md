@@ -16,6 +16,6 @@
 
 **Open questions / blockers:** <who can answer — harness owner @JKord for rules/hooks/migrations>
 
-**How to verify:** <commands to run and what green looks like, e.g. `npm run db:reset && npm test && npm run typecheck`>
+**How to verify:** <commands to run and what green looks like, e.g. `npm test && npm run typecheck`>
 
 **Links:** <ticket, PR, branch, files touched, relevant docs/ai/* pages>

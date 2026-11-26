@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // owner: @JKord · why: an applied migration was edited once, silently changing schema history for everyone who had already run it; .env files must never be created or edited by agents · review-by: 2027-02-28
-// PreToolUse hook for Edit|MultiEdit|Write: reads the JSON payload from stdin, exits 2 (blocking) when
-// tool_input.file_path is a git-tracked file in db/migrations/ or any .env / .env.* file (at any depth).
+// PreToolUse hook for Edit|MultiEdit|Write|Bash: reads the JSON payload from stdin, exits 2 (blocking) when
+// tool_input.file_path is a git-tracked file in db/migrations/ or any .env / .env.* file (at any depth), or when
+// a Bash tool_input.command names a .env / .env.* file (cat .env, cp .env.local …). Bash writes to migrations
+// are caught right after the tool runs by the PostToolUse hook check-migrations-unchanged.mjs.
 // Paths resolve against $CLAUDE_PROJECT_DIR (falls back to cwd), so the hook works after the agent `cd`s.
 // Works on Windows and POSIX: path handling via node:path, no shell builtins.
 import { execFileSync } from "node:child_process";
@@ -18,6 +20,19 @@ try {
   payload = JSON.parse(raw);
 } catch {
   process.exit(0); // not our payload — fail open
+}
+
+// Bash: block any command that names an env file. Best effort — a recursive "grep -r SECRET ." that never names
+// the file is not caught (see docs/ai/hook-evidence.md, Known limits).
+const command = payload?.tool_input?.command;
+if (payload?.tool_name === "Bash" && typeof command === "string") {
+  if (/(?:^|[^\w.-])\.env(?:\.[\w.-]*)?(?![\w-])/i.test(command)) {
+    console.error(
+      "Blocked: this command names a .env file, which may contain secrets. Agents never read or write .env files — ask the repo owner (@JKord).",
+    );
+    process.exit(2);
+  }
+  process.exit(0);
 }
 
 const filePath = payload?.tool_input?.file_path;

@@ -10,13 +10,17 @@
 `AGENTS.md`, `.claude/rules/migrations.md`, `.claude/skills/add-task-field/SKILL.md`,
 `.claude/hooks/protect-migrations.mjs`, `.claude/settings.json`)
 
-**Method.** Each run was a fresh headless agent session launched as `claude -p "<task>" --output-format json`
-(the launch mode from `docs/ai/templates/ab-note.md`), with no extra explanation beyond the prompt, started from
-the same clean working tree. The tree was restored between runs. Tool-use counts and durations come from the
-session summaries; durations are approximate wall-clock times. Note on prompts: in `-p` (print) mode permission
-prompts cannot be shown or answered — B ran `db:reset` without an `ask` prompt, which is consistent with the
-`settings.json` ask rules not being enforced during these runs (see section 3 of
-[`hook-evidence.md`](hook-evidence.md)); it is not evidence that prompting works.
+**Method.** Each run was a fresh headless agent session launched as
+`claude -p "<task>" --output-format json --permission-mode bypassPermissions` — the same flag on both sides
+(the launch mode from `docs/ai/templates/ab-note.md`; `-p` alone cannot answer permission prompts, so edits need
+a permission mode). No extra explanation beyond the prompt, started from the same clean working tree. The tree was
+restored between runs. Tool-use counts and durations come from the session summaries; durations are approximate
+wall-clock times. Note on prompts: `bypassPermissions` skips `ask` prompts, which is why B ran `db:reset` without
+one. These runs say nothing about whether `ask` rules work (see section 3 of [`hook-evidence.md`](hook-evidence.md)).
+
+**Later change.** At the time of these runs, the skill's check was `db:reset && test && typecheck`. It has since
+been reduced to `npm test && npm run typecheck`: `db:reset` is on `ask` and adds no verification (see the caveat
+below).
 
 **Caveat on `db:reset` as verification.** The tests do not touch the on-disk database: `lib/tasks.test.ts` opens
 an in-memory SQLite DB (`openDb(":memory:")`), which replays all migrations itself. So `db:reset` (which wipes and

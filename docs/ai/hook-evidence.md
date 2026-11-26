@@ -2,7 +2,17 @@
 
 <!-- owner: @JKord · why: homework requires proof the blocking hook actually fires · review-by: 2027-02-28 -->
 
-Hook: `PreToolUse`, matcher `Edit|MultiEdit|Write`, registered in `.claude/settings.json` as
+**Update 2026-11-26 — Bash coverage.** The PreToolUse matcher is now `Edit|MultiEdit|Write|Bash`: a Bash command
+that names a `.env` / `.env.*` file (`cat .env`, `cp .env.local …`) is blocked with exit 2. A second hook,
+`PostToolUse` with matcher `*` → `.claude/hooks/check-migrations-unchanged.mjs`, runs
+`git diff --name-only --no-renames --diff-filter=MD HEAD -- db/migrations/` after every tool. If a committed
+migration was modified or deleted by any tool (`echo x>…`, `sed -i …`, `cd db/migrations && sed -i …`, MCP tools),
+it exits 2 and tells the agent to restore the file. PostToolUse cannot undo the write. It is a detector that fires
+on the very next tool result, not a pre-blocker. Covered by `.claude/hooks/protect-migrations.test.ts` (12/12 pass
+with `npm test`, 2026-11-26): Bash `.env` commands → 2, look-alikes (`process.env.HOME`, `config.envrc`) → 0, and
+in a throwaway git repo a new migration → 0, a modified or deleted committed migration → 2.
+
+Hook: `PreToolUse`, matcher `Edit|MultiEdit|Write` (original scope, see the update above), registered in `.claude/settings.json` as
 `node "$CLAUDE_PROJECT_DIR/.claude/hooks/protect-migrations.mjs"`. It blocks (exit 2, reason on stderr) an
 Edit/Write of a **git-tracked** file under `db/migrations/` or of any `.env` / `.env.*` file at any depth.
 "Git-tracked" (not merely existing): a migration the agent created a minute ago is still untracked, so it stays
@@ -124,7 +134,11 @@ see the A/B note).
 
 ## Known limits
 
-- Covers file-edit tools only; a Bash command such as `sed -i` on a migration is not intercepted. CODEOWNERS
-  review on `/db/migrations/` is the backstop.
+- Migrations: Edit/Write is blocked *before* the write. A Bash or MCP write (`sed -i`, `echo >`) is only
+  *detected after* it runs, by the PostToolUse hook, which tells the agent to restore. CODEOWNERS review on
+  `/db/migrations/` stays the final backstop.
+- `.env`: the `Read(...)` deny rules apply to the Read tool (Claude Code applies them best-effort to Grep/Glob as
+  well). Bash is covered only when the command names the file. A recursive `grep -rn SECRET .` that never mentions
+  `.env` is not caught. No `.env` exists in this repo, which limits the exposure.
 - Fails open on a malformed payload (exit 0), so a broken payload never blocks unrelated work.
 - `.env.example` is blocked too (it matches `.env.*`); changes to it go through a human, by design.

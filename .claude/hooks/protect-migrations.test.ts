@@ -1,7 +1,8 @@
 // Tests for the PreToolUse hook: each case pipes a JSON payload into the script
 // (as Claude Code does) and asserts the exit code. See docs/ai/hook-evidence.md.
-import { spawnSync } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -60,5 +61,57 @@ it("allows editing a migration that exists but is not tracked by git yet", () =>
     expect(r.status).toBe(0);
   } finally {
     rmSync(probe, { force: true });
+  }
+});
+
+const bash = (command: string) => JSON.stringify({ tool_name: "Bash", tool_input: { command } });
+
+it("blocks Bash commands that name an env file", () => {
+  for (const cmd of ["cat .env", "cp .env.local /tmp/x", "type app\\.ENV", "grep SECRET ./.env.production"]) {
+    const r = runHook(bash(cmd));
+    expect(r.status, cmd).toBe(2);
+    expect(r.stderr).toMatch(/\.env file/);
+  }
+});
+
+it("allows Bash commands that only look similar to an env file name", () => {
+  for (const cmd of ["npm test", 'node -e "console.log(process.env.HOME)"', "ls config.envrc", "git status"]) {
+    expect(runHook(bash(cmd)).status, cmd).toBe(0);
+  }
+});
+
+// PostToolUse backstop: runs against a throwaway git repo so the real migrations are never touched.
+const postHook = fileURLToPath(new URL("./check-migrations-unchanged.mjs", import.meta.url));
+
+it("PostToolUse: reports a committed migration changed by any tool, ignores new ones", () => {
+  const repo = mkdtempSync(join(tmpdir(), "mig-hook-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+  const run = () =>
+    spawnSync(process.execPath, [postHook], {
+      input: bash("sed -i s/120/200/ db/migrations/001_a.sql"),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+      encoding: "utf8",
+    });
+  try {
+    mkdirSync(join(repo, "db", "migrations"), { recursive: true });
+    const applied = join(repo, "db", "migrations", "001_a.sql");
+    writeFileSync(applied, "create table t (x int);\n");
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "init");
+
+    writeFileSync(join(repo, "db", "migrations", "002_new.sql"), "alter table t add column y int;\n");
+    expect(run().status).toBe(0); // a brand-new migration is fine
+
+    writeFileSync(applied, "create table t (x bigint);\n"); // what `sed -i` / `echo >` would do
+    const r = run();
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/db\/migrations\/001_a\.sql/);
+
+    rmSync(applied); // deletion is a violation too
+    expect(run().status).toBe(2);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
   }
 });

@@ -18,5 +18,6 @@ Example: `priority` (`low | medium | high`, default `medium`).
 4. **Test** — `lib/tasks.test.ts`: default value, explicit value, invalid value throws `RuleViolation`,
    update persists, missing task throws.
 
-**Check:** `npm run db:reset && npm test && npm run typecheck` — all green.
+**Check:** `npm test && npm run typecheck` — all green. (`npm test` opens an in-memory DB and replays every
+migration, including the new one; the local dev DB picks the new migration up on the next start.)
 If the hook blocks a migration edit, you are editing an existing file — create a new one instead.
