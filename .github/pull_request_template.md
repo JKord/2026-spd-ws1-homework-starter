@@ -24,7 +24,7 @@
 
 ## Agent involvement
 
-<!-- None, or: tool and model, what it did (spec draft, code, tests, review). Matches the Assisted-by trailers. -->
+<!-- None, or: tool and model, what it did (spec draft, code, tests, review). Informational only: the author answers for the change, there is no Assisted-by trailer. -->
 
 ## Accountable
 
