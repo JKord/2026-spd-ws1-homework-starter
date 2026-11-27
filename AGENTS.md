@@ -22,5 +22,6 @@ migrations in `db/migrations/`, connection and runner in `lib/db.ts`, domain log
 
 - Autonomy matrix, owners, rule-change process: `docs/ai/team-agreement.md`
 - Path rule for `db/migrations/**`: `.claude/rules/migrations.md`
+- Commit trailer convention (`Refs:`, `Evidence:`; no `Assisted-by:` — the author is accountable): `.claude/rules/commits.md`
 - Repeatable procedure "add a field to tasks": `.claude/skills/add-task-field/SKILL.md`
 - Handoff note template for end-of-session notes: `docs/ai/handoff-template.md`
